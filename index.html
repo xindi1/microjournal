@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>Time Block Journal</title>
+
+<!-- PWA -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#132033">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Time Journal">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+
+<style>
+:root{
+  --bg:#0e1621; --panel:#132033; --text:#e8f0ff;
+  --muted:#8faad3; --accent:#4da3ff; --danger:#ff6b6b;
+}
+body.light{
+  --bg:#f6f9ff; --panel:#fff; --text:#0d1b2a;
+  --muted:#5a6b85; --accent:#2563eb;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  background:var(--bg);
+  color:var(--text);
+}
+header{
+  padding:10px;
+  background:var(--panel);
+  display:flex;
+  gap:6px;
+  align-items:center;
+}
+h1{font-size:16px;margin:0;flex:1}
+button,input,select{
+  background:none;
+  border:1px solid var(--accent);
+  color:var(--accent);
+  padding:4px 6px;
+  border-radius:6px;
+  font-size:12px;
+}
+#entry,.row{
+  display:grid;
+  grid-template-columns:100px 1fr 50px 40px 28px;
+  gap:6px;
+  align-items:center;
+}
+#entry{padding:8px;background:var(--panel)}
+#log{padding:8px 12px}
+.row{
+  padding:4px 0;
+  border-bottom:1px solid rgba(255,255,255,.05);
+}
+.time{color:var(--muted)}
+.duration,.energy{
+  text-align:right;
+  font-size:12px;
+  color:var(--muted);
+}
+.delete{
+  color:var(--danger);
+  cursor:pointer;
+  text-align:center;
+}
+#summary,#week{
+  padding:10px 12px;
+  font-size:13px;
+  border-top:1px solid rgba(255,255,255,.1);
+}
+.dayBlock{margin-bottom:8px}
+.dayBlock strong{color:var(--accent)}
+</style>
+</head>
+
+<body>
+
+<header>
+  <h1>Time Block Journal</h1>
+  <input type="date" id="date">
+  <button onclick="template()">Template</button>
+  <button onclick="weekView()">Week</button>
+  <button onclick="exportCSV()">CSV</button>
+  <button onclick="exportMD()">MD</button>
+  <button onclick="toggleTheme()">Theme</button>
+</header>
+
+<div id="entry">
+  <input id="time" placeholder="0000-0100">
+  <input id="text" placeholder="category / activity">
+  <select id="energy">
+    <option value="0">0</option>
+    <option value="1">+1</option>
+    <option value="2">+2</option>
+    <option value="-1">-1</option>
+    <option value="-2">-2</option>
+  </select>
+  <div class="duration"></div>
+  <button onclick="add()">+</button>
+</div>
+
+<div id="log"></div>
+<div id="summary"></div>
+<div id="week"></div>
+
+<script>
+/* ---------------- CORE LOGIC ---------------- */
+
+const BASE="timeJournalV3";
+const log=document.getElementById("log");
+const summary=document.getElementById("summary");
+const week=document.getElementById("week");
+const dateInput=document.getElementById("date");
+
+dateInput.valueAsDate=new Date();
+const key=()=>BASE+"_"+dateInput.value;
+
+const mins=t=>{
+  const[a,b]=t.split("-");
+  if(!b) return 0;
+  return (+b.slice(0,2)*60+ +b.slice(2))-(+a.slice(0,2)*60+ +a.slice(2));
+};
+const fmt=m=>m>0?`${Math.floor(m/60)}h ${m%60}m`:"";
+
+function load(){
+  log.innerHTML=""; week.innerHTML="";
+  (JSON.parse(localStorage.getItem(key()))||[]).forEach(addRow);
+  summarize();
+}
+function save(){
+  const rows=[...document.querySelectorAll(".row")].map(r=>({
+    time:r.children[0].innerText,
+    text:r.children[1].innerText,
+    energy:r.children[2].innerText
+  }));
+  localStorage.setItem(key(),JSON.stringify(rows));
+  summarize();
+}
+
+function add(){
+  if(!time.value||!text.value) return;
+  addRow({time:time.value,text:text.value,energy:energy.value});
+  autoNext();
+  time.value=""; text.value=""; energy.value="0";
+  save();
+}
+
+function addRow(d){
+  const r=document.createElement("div");
+  r.className="row";
+  r.innerHTML=`
+    <div class="time" contenteditable>${d.time}</div>
+    <div contenteditable>${d.text}</div>
+    <div class="energy" contenteditable>${d.energy||0}</div>
+    <div class="duration">${fmt(mins(d.time))}</div>
+    <div class="delete">×</div>`;
+  r.oninput=save;
+  r.querySelector(".delete").onclick=()=>{r.remove();save()};
+  log.appendChild(r);
+}
+
+function autoNext(){
+  const rows=[...document.querySelectorAll(".row")];
+  if(!rows.length) return;
+  const end=rows.at(-1).children[0].innerText.split("-")[1];
+  time.value=end+"-";
+}
+
+function summarize(){
+  let sleep=0,energySum=0;
+  const cats={};
+  [...document.querySelectorAll(".row")].forEach(r=>{
+    const t=mins(r.children[0].innerText);
+    const c=r.children[1].innerText.split(" ")[0];
+    const e=+r.children[2].innerText||0;
+    cats[c]=(cats[c]||0)+t;
+    if(c==="sleep") sleep+=t;
+    energySum+=t*e;
+  });
+  const delta=sleep-480;
+  summary.innerHTML=
+    Object.entries(cats).map(([k,v])=>`${k}: ${fmt(v)}`).join("<br>")+
+    `<br><br>Sleep: ${fmt(sleep)} (${delta>=0?"+":""}${fmt(delta)})`+
+    `<br>Energy score: ${energySum}`;
+}
+
+function weekView(){
+  week.innerHTML="";
+  for(let i=0;i<7;i++){
+    const d=new Date(dateInput.value);
+    d.setDate(d.getDate()-i);
+    const k=BASE+"_"+d.toISOString().slice(0,10);
+    const rows=JSON.parse(localStorage.getItem(k)||"[]");
+    if(!rows.length) continue;
+    const div=document.createElement("div");
+    div.className="dayBlock";
+    div.innerHTML=`<strong>${d.toDateString()}</strong><br>`+
+      rows.map(r=>`${r.time} ${r.text}`).join("<br>");
+    week.appendChild(div);
+  }
+}
+
+function exportCSV(){
+  let csv="date,time,text,energy\n";
+  for(let i=0;i<7;i++){
+    const d=new Date(dateInput.value); d.setDate(d.getDate()-i);
+    const k=BASE+"_"+d.toISOString().slice(0,10);
+    (JSON.parse(localStorage.getItem(k)||"[]")).forEach(r=>{
+      csv+=`${d.toISOString().slice(0,10)},${r.time},${r.text},${r.energy}\n`;
+    });
+  }
+  download(csv,"time-journal.csv","text/csv");
+}
+
+function exportMD(){
+  let md="";
+  for(let i=0;i<7;i++){
+    const d=new Date(dateInput.value); d.setDate(d.getDate()-i);
+    const k=BASE+"_"+d.toISOString().slice(0,10);
+    const rows=JSON.parse(localStorage.getItem(k)||"[]");
+    if(!rows.length) continue;
+    md+=`## ${d.toDateString()}\n`+
+      rows.map(r=>`- ${r.time} ${r.text}`).join("\n")+"\n\n";
+  }
+  download(md,"time-journal.md","text/markdown");
+}
+
+function download(data,name,type){
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([data],{type}));
+  a.download=name;
+  a.click();
+}
+
+function template(){
+  log.innerHTML="";
+  addRow({time:"0000-0700",text:"sleep",energy:"1"});
+  addRow({time:"0700-0800",text:"morning",energy:"0"});
+  save();
+}
+
+function toggleTheme(){document.body.classList.toggle("light")}
+dateInput.onchange=load;
+load();
+
+/* ---------------- SERVICE WORKER ---------------- */
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("service-worker.js");
+}
+</script>
+
+</body>
+</html>
